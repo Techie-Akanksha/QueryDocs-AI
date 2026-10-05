@@ -6,6 +6,7 @@ import faiss
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
+from requests.exceptions import Timeout, RequestException
 
 
 # -----------------------------------
@@ -15,6 +16,13 @@ from sentence_transformers import SentenceTransformer
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+if not GROQ_API_KEY:
+    st.error(
+        "Groq API key is missing. "
+        "Please add GROQ_API_KEY to your .env file."
+    )
+    st.stop()
 
 url = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -32,7 +40,7 @@ st.title("AI PDF Question Answering System")
 
 st.write("Upload a PDF and ask questions from it.")
 
-st.write("API key loaded:", GROQ_API_KEY is not None)
+# st.write("API key loaded:", GROQ_API_KEY is not None)
 
 
 uploaded_file = st.file_uploader(
@@ -60,14 +68,27 @@ model = SentenceTransformer(
 
 if uploaded_file is not None:
 
-    reader = PdfReader(uploaded_file)
+    try:       
+        reader = PdfReader(uploaded_file)
 
-    all_text = ""
+        all_text = ""
 
-    for page in reader.pages:
-        text = page.extract_text()
-        all_text += text
+        for page in reader.pages:
+            text = page.extract_text()
 
+            if text:
+                all_text += text
+
+    except Exception as e:
+            st.error("Unable to read this PDF. Please upload a valid PDF file.")
+            st.stop()
+
+    if not all_text.strip():
+        st.warning(
+            "No readable text was found in this PDF. "
+            "Please upload a text-based PDF."
+        )
+        st.stop()
 
     # -----------------------------------
     # 5. Create chunks
@@ -112,17 +133,6 @@ if uploaded_file is not None:
 
     index.add(embeddings)
 
-    st.write(
-        "FAISS dimension:",
-        index.d
-    )
-
-    st.write(
-        "Number of vectors after adding:",
-        index.ntotal
-    )
-
-
     # -----------------------------------
     # 8. Retrieve relevant chunks
     # -----------------------------------
@@ -140,105 +150,115 @@ if uploaded_file is not None:
             k
         )
 
-
-        st.write(
-            "Distances:",
-            distances.tolist()
-        )
-
-        st.write(
-            "Indices:",
-            indices.tolist()
-        )
-
-
         # -----------------------------------
-        # 9. Create context
+            # Choosing Relevant context
         # -----------------------------------
 
-        context = ""
+        best_distance = distances[0][0]
 
-        for i in indices[0]:
+        if best_distance > 1.2:
 
-            context += chunks[i] + "\n\n"
+            st.warning("This question does not appear to be covered by the uploaded PDF.")
 
+        else:
+            
+            # -----------------------------------
+            # 9. Create context
+            # -----------------------------------
 
-        st.write("Retrieved Context:")
+            context = ""
 
-        st.write(context)
+            for i in indices[0]:
 
-
-        # -----------------------------------
-        # 10. Create prompt
-        # -----------------------------------
-
-        prompt = f"""
-        Answer the question using only the provided context.
-
-        Context:
-        {context}
-
-        Question:
-        {question}
-        """
+                context += chunks[i] + "\n\n"
 
 
-        # -----------------------------------
-        # 11. Create API request body
-        # -----------------------------------
+            # -----------------------------------
+            # 10. Create prompt
+            # -----------------------------------
 
-        data = {
+            prompt = f"""
+            Answer the question using only the provided context.
 
-            "model": "openai/gpt-oss-120b",
+            Context:
+            {context}
 
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        }
+            Question:
+            {question}
+            """
 
 
-        # -----------------------------------
-        # 12. Send request to AI
-        # -----------------------------------
+            # -----------------------------------
+            # 11. Create API request body
+            # -----------------------------------
 
-        response = requests.post(
+            data = {
 
-            url,
+                "model": "openai/gpt-oss-120b",
 
-            headers=headers,
-
-            json=data,
-
-            timeout=30
-        )
-
-
-        # -----------------------------------
-        # 13. Check API response
-        # -----------------------------------
-
-        # response.raise_for_status()
-        st.write("Status code:", response.status_code)
-        st.write("API response:", response.text)
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            }
 
 
-        # -----------------------------------
-        # 14. Convert JSON response
-        # -----------------------------------
+            # -----------------------------------
+            # 12. Send request to AI
+            # -----------------------------------
+            try:    
+                response = requests.post(
 
-        # result = response.json()
+                    url,
+
+                    headers=headers,
+
+                    json=data,
+
+                    timeout=30
+                )
+
+                response.raise_for_status()
+
+            except Timeout:
+                st.error(
+                    "The AI service took too long to respond. "
+                    "Please try again."
+                )
+                st.stop()
+
+            except RequestException:
+                st.error(
+                    "Unable to connect to the AI service. "
+                    "Please try again later."
+                )
+                st.stop()
+
+            # -----------------------------------
+            # 13. Check API response
+            # -----------------------------------
+
+            # st.write("Status code:", response.status_code)
+            # st.write("API response:", response.text)
 
 
-        # st.write("AI Response:")
+            # -----------------------------------
+            # 14. Convert JSON response
+            # -----------------------------------
 
-        # st.write(result)
+            result = response.json()
 
-        result = response.json()
+            answer = result["choices"][0]["message"]["content"]
 
-        answer = result["choices"][0]["message"]["content"]
+            st.write("### 🤖 Answer")
+            st.write(answer)
 
-        st.write("### 🤖 Answer")
-        st.write(answer)
+            # -----------------------------------
+            # 14. Source of response
+            # -----------------------------------
+            # st.write("### 📚 Sources")
+
+            # for rank, i in enumerate(indices[0], start=1):
+            #     st.write(f"Source {rank}: Chunk {i}")
