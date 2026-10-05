@@ -187,14 +187,7 @@ if uploaded_files:
     # 8. Retrieve relevant chunks
     # -----------------------------------
 
-    if submitted and question:
-
-        with st.spinner(
-            "🔎 Searching your documents and generating an answer..."
-        ):
-
-            import time
-            time.sleep(2)
+    if submitted and question:pip freeze > requirements.txt
 
             question_embedding = model.encode(
                 [question]
