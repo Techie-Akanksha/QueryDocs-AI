@@ -8,6 +8,29 @@ from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
 from requests.exceptions import Timeout, RequestException
 
+st.markdown(
+    """
+    <style>
+
+    .main-title {
+        text-align: center;
+    }
+
+    .subtitle {
+        text-align: center;
+    }
+
+    .question-label {
+    text-align: center;
+    font-weight: 600;
+    margin-top: 25px;
+    margin-bottom: 8px;
+}
+
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # -----------------------------------
 # 1. Load environment variables
@@ -36,22 +59,41 @@ headers = {
 # 2. Streamlit interface
 # -----------------------------------
 
-st.title("AI PDF Question Answering System")
+st.markdown(
+    '<h1 class="main-title">📚 AI Document Q&A</h1>',
+    unsafe_allow_html=True
+)
+\
 
-st.write("Upload a PDF and ask questions from it.")
-
-# st.write("API key loaded:", GROQ_API_KEY is not None)
-
-
-uploaded_file = st.file_uploader(
-    "Upload Your PDF",
-    type=["pdf"]
+st.markdown(
+    '<p class="subtitle">Upload one or more PDF documents and ask questions based only on their content.</p>',
+    unsafe_allow_html=True
 )
 
-question = st.text_input(
-    "Ask a question about the PDF"
+st.sidebar.title("📚 Documents")
+
+uploaded_files = st.sidebar.file_uploader(
+    "📄 Upload your PDF documents",
+    type=["pdf"],
+    accept_multiple_files=True
 )
 
+st.markdown(
+    '<div class="question-label">💬 Ask a question about your documents</div>',
+    unsafe_allow_html=True
+)
+
+with st.form("question_form"):
+
+    question = st.text_input(
+        "Question",
+        placeholder="e.g. What is a Transformer?",
+        label_visibility="collapsed"
+    )
+
+    submitted = st.form_submit_button(
+        "🔍 Ask Question"
+    )
 
 # -----------------------------------
 # 3. Load embedding model
@@ -61,60 +103,68 @@ model = SentenceTransformer(
     "all-MiniLM-L6-v2"
 )
 
+# -----------------------------------
+    # 4. Create chunks
+# -----------------------------------
+        
+def chunk_text(text, chunk_size=500, overlap=100):
+        
+    chunks = []
+        
+    start = 0
+        
+    while start < len(text):
+        
+        end = start + chunk_size
+        
+        chunk = text[start:end]
+        
+        chunks.append(chunk)
+        
+        start += chunk_size - overlap
+        
+        return chunks
 
 # -----------------------------------
-# 4. Process PDF
+# 5. Process PDF
 # -----------------------------------
 
-if uploaded_file is not None:
+if uploaded_files:
 
-    try:       
-        reader = PdfReader(uploaded_file)
+    try:
+        all_chunks = []
 
-        all_text = ""
+        st.sidebar.write(f"✓ 📚 {len(uploaded_files)} document(s) uploaded")
 
-        for page in reader.pages:
-            text = page.extract_text()
+        for uploaded_file in uploaded_files:
 
-            if text:
-                all_text += text
+            reader = PdfReader(uploaded_file)
 
-    except Exception as e:
-            st.error("Unable to read this PDF. Please upload a valid PDF file.")
-            st.stop()
+            pdf_text = ""
 
-    if not all_text.strip():
-        st.warning(
-            "No readable text was found in this PDF. "
-            "Please upload a text-based PDF."
+            for page in reader.pages:
+
+                text = page.extract_text()
+
+                if text:
+                    pdf_text += text + "\n"
+
+            if pdf_text.strip():
+
+                pdf_chunks = chunk_text(pdf_text)
+
+                all_chunks.extend(pdf_chunks)
+
+
+
+    except Exception:
+        st.error(
+            "Unable to read this PDF. "
+            "Please upload a valid PDF file."
         )
         st.stop()
 
-    # -----------------------------------
-    # 5. Create chunks
-    # -----------------------------------
-
-    def chunk_text(text, chunk_size=500, overlap=100):
-
-        chunks = []
-
-        start = 0
-
-        while start < len(text):
-
-            end = start + chunk_size
-
-            chunk = text[start:end]
-
-            chunks.append(chunk)
-
-            start += chunk_size - overlap
-
-        return chunks
-
-
-    chunks = chunk_text(all_text)
-
+    chunks = all_chunks
 
     # -----------------------------------
     # 6. Create embeddings
@@ -137,128 +187,130 @@ if uploaded_file is not None:
     # 8. Retrieve relevant chunks
     # -----------------------------------
 
-    if question:
+    if submitted and question:
 
-        question_embedding = model.encode(
-            [question]
-        )
+        with st.spinner(
+            "🔎 Searching your documents and generating an answer..."
+        ):
 
-        k = 3
+            import time
+            time.sleep(2)
 
-        distances, indices = index.search(
-            question_embedding.astype("float32"),
-            k
-        )
+            question_embedding = model.encode(
+                [question]
+            )
 
-        # -----------------------------------
-            # Choosing Relevant context
-        # -----------------------------------
+            k = 3
 
-        best_distance = distances[0][0]
-
-        if best_distance > 1.2:
-
-            st.warning("This question does not appear to be covered by the uploaded PDF.")
-
-        else:
-            
-            # -----------------------------------
-            # 9. Create context
-            # -----------------------------------
-
-            context = ""
-
-            for i in indices[0]:
-
-                context += chunks[i] + "\n\n"
-
+            distances, indices = index.search(
+                question_embedding.astype("float32"),
+                k
+            )
 
             # -----------------------------------
-            # 10. Create prompt
+                # Choosing Relevant context
             # -----------------------------------
 
-            prompt = f"""
-            Answer the question using only the provided context.
+            best_distance = distances[0][0]
 
-            Context:
-            {context}
+            if best_distance > 1.2:
 
-            Question:
-            {question}
-            """
+                st.warning("This question does not appear to be covered by the uploaded PDF.")
 
+            else:
+                
+                # -----------------------------------
+                # 9. Create context
+                # -----------------------------------
 
-            # -----------------------------------
-            # 11. Create API request body
-            # -----------------------------------
+                context = ""
 
-            data = {
+                for i in indices[0]:
 
-                "model": "openai/gpt-oss-120b",
-
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
-            }
+                    context += chunks[i] + "\n\n"
 
 
-            # -----------------------------------
-            # 12. Send request to AI
-            # -----------------------------------
-            try:    
-                response = requests.post(
+                # -----------------------------------
+                # 10. Create prompt
+                # -----------------------------------
 
-                    url,
+                prompt = f"""
+                Answer the question using only the provided context.
 
-                    headers=headers,
+                Context:
+                {context}
 
-                    json=data,
-
-                    timeout=30
-                )
-
-                response.raise_for_status()
-
-            except Timeout:
-                st.error(
-                    "The AI service took too long to respond. "
-                    "Please try again."
-                )
-                st.stop()
-
-            except RequestException:
-                st.error(
-                    "Unable to connect to the AI service. "
-                    "Please try again later."
-                )
-                st.stop()
-
-            # -----------------------------------
-            # 13. Check API response
-            # -----------------------------------
-
-            # st.write("Status code:", response.status_code)
-            # st.write("API response:", response.text)
+                Question:
+                {question}
+                """
 
 
-            # -----------------------------------
-            # 14. Convert JSON response
-            # -----------------------------------
+                # -----------------------------------
+                # 11. Create API request body
+                # -----------------------------------
 
-            result = response.json()
+                data = {
 
-            answer = result["choices"][0]["message"]["content"]
+                    "model": "openai/gpt-oss-120b",
 
-            st.write("### 🤖 Answer")
-            st.write(answer)
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ]
+                }
 
-            # -----------------------------------
-            # 14. Source of response
-            # -----------------------------------
-            # st.write("### 📚 Sources")
 
-            # for rank, i in enumerate(indices[0], start=1):
-            #     st.write(f"Source {rank}: Chunk {i}")
+                # -----------------------------------
+                # 12. Send request to AI
+                # -----------------------------------
+                try:    
+                    response = requests.post(
+
+                        url,
+
+                        headers=headers,
+
+                        json=data,
+
+                        timeout=30
+                    )
+
+                    response.raise_for_status()
+
+                except Timeout:
+                    st.error(
+                        "The AI service took too long to respond. "
+                        "Please try again."
+                    )
+                    st.stop()
+
+                except RequestException:
+                    st.error(
+                        "Unable to connect to the AI service. "
+                        "Please try again later."
+                    )
+                    st.stop()
+
+                # -----------------------------------
+                # 13. Check API response
+                # -----------------------------------
+
+                # st.write("Status code:", response.status_code)
+                # st.write("API response:", response.text)
+
+
+                # -----------------------------------
+                # 14. Convert JSON response
+                # -----------------------------------
+
+                result = response.json()
+
+                answer = result["choices"][0]["message"]["content"]
+
+                with st.container(border=True):
+
+                    st.markdown("### 🤖 Answer")
+
+                    st.markdown(answer)
