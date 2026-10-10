@@ -1,4 +1,4 @@
-# 📚 AI Document Q&A
+# 📚 QueryDoc AI | AI-Powered PDF Question Answering System
 
 ## 📌 Project Overview
 

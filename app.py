@@ -63,7 +63,7 @@ st.markdown(
     '<h1 class="main-title">📚 AI Document Q&A</h1>',
     unsafe_allow_html=True
 )
-\
+
 
 st.markdown(
     '<p class="subtitle">Upload one or more PDF documents and ask questions based only on their content.</p>',
@@ -187,7 +187,7 @@ if uploaded_files:
     # 8. Retrieve relevant chunks
     # -----------------------------------
 
-    if submitted and question:pip freeze > requirements.txt
+    if submitted and question:
 
             question_embedding = model.encode(
                 [question]
